@@ -14,6 +14,7 @@ from telegram import (
     ReplyKeyboardMarkup,
     Update,
 )
+from telegram import CopyTextButton
 from telegram.constants import KeyboardButtonStyle as KBS
 from telegram.ext import (
     Application,
@@ -419,23 +420,29 @@ def format_number_message(country, service, number, first_name=None):
         number = '+' + number
 
     message = f"""
-✨ **Hello, {first_name}!** ✨
-
-🎯 *You have been assigned a unique number.*
-
-━━━━━━━━━━━━━━━━━━━━
-
-☎️ **NUMBER:** `{number}`
-
-💡 **APP:** `{service}`
-
-🌍 **COUNTRY:** `{flag} {country}`
+🔥 *{first_name}* Your *{service}* Number! 🌼
 
 ━━━━━━━━━━━━━━━━━━━━
 🕐 *{current_time}*
 """
-    return message, number_action_keyboard()
-
+    number_btn = InlineKeyboardButton(
+        f"⚡ {number}",
+        copy_text=CopyTextButton(text=number),
+        style=KBS.PRIMARY 
+    )
+    new_num_btn = InlineKeyboardButton("🔄 NEW NUMBER", callback_data="next_number", style=KBS.SUCCESS)
+    change_country_btn = InlineKeyboardButton("🌍 Change Country", callback_data="back_to_countries", style=KBS.SUCCESS)
+    
+    rows = [[number_btn]]
+    rows.append([new_num_btn, change_country_btn])
+    
+    otp_url = safe_url(GROUP_LINKS.get("otp_group"))
+    if otp_url:
+        rows.append([InlineKeyboardButton("👥 Join OTP Group", url=otp_url, style=KBS.PRIMARY)])
+    rows.append([InlineKeyboardButton("🏠 Main Menu", callback_data="back_to_menu", style=KBS.DANGER)])
+    
+    keyboard = InlineKeyboardMarkup(rows)
+    return message, keyboard
 # ==================== JOIN CHECK FUNCTIONS ====================
 
 async def check_joined_channels(bot, user_id):
@@ -859,31 +866,42 @@ async def next_number_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     await query.answer("⏳ Getting next number...")
 
+    # First check active session
     result = db_fetch_one(
         "SELECT current_country, current_service FROM users WHERE user_id = ?", (user_id,))
 
+    # If no active session, fallback to most recent number in history
     if not result or not result[0]:
-        countries = db_fetch_all(
-            "SELECT name, service, stock FROM countries WHERE active = 1 AND stock > 0 ORDER BY name")
-        if countries:
-            try:
-                await query.edit_message_text(
-                    "📲 *Select a Country & Service:*",
-                    reply_markup=countries_keyboard(countries),
-                    parse_mode='Markdown')
-            except Exception:
-                pass
+        fallback = db_fetch_one(
+            "SELECT country, service FROM numbers WHERE user_id = ? ORDER BY assigned_date DESC LIMIT 1",
+            (user_id,)
+        )
+        if fallback:
+            country, service = fallback
         else:
-            try:
-                await query.edit_message_text(
-                    "❌ No numbers available at the moment.",
-                    reply_markup=back_to_main_keyboard())
-            except Exception:
-                pass
-        return
+            # No history at all → show country selection
+            countries = db_fetch_all(
+                "SELECT name, service, stock FROM countries WHERE active = 1 AND stock > 0 ORDER BY name")
+            if countries:
+                try:
+                    await query.edit_message_text(
+                        "📲 *Select a Country & Service:*",
+                        reply_markup=countries_keyboard(countries),
+                        parse_mode='Markdown')
+                except Exception:
+                    pass
+            else:
+                try:
+                    await query.edit_message_text(
+                        "❌ No numbers available at the moment.",
+                        reply_markup=back_to_main_keyboard())
+                except Exception:
+                    pass
+            return
+    else:
+        country, service = result
 
-    country, service = result
-
+    # Verify stock exists for that country/service
     stock_result = db_fetch_one(
         "SELECT stock FROM countries WHERE name = ? AND service = ? AND active = 1",
         (country, service))
